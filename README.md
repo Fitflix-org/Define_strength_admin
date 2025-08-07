@@ -1,0 +1,1 @@
+# Define_strength_admin
