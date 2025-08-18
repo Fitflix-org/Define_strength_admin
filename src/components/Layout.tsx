@@ -1,7 +1,23 @@
 import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, ShoppingCart, CreditCard, LogOut, User, Menu, X } from 'lucide-react'
+import { 
+  LayoutDashboard, 
+  ShoppingCart, 
+  CreditCard, 
+  LogOut, 
+  User, 
+  Menu, 
+  X, 
+  BarChart3, 
+  Package, 
+  Users, 
+  Settings,
+  Star,
+  MessageSquare,
+  Mail,
+  Heart
+} from 'lucide-react'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -16,6 +32,15 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Orders', href: '/orders', icon: ShoppingCart },
     { name: 'Payments', href: '/payments', icon: CreditCard },
+    { name: 'Analytics', href: '/analytics', icon: BarChart3 },
+    { name: 'Advanced Analytics', href: '/advanced-analytics', icon: BarChart3 },
+    { name: 'Products', href: '/products', icon: Package },
+    { name: 'Users', href: '/users', icon: Users },
+    { name: 'Reviews', href: '/reviews', icon: Star },
+    { name: 'Contact Messages', href: '/contact-messages', icon: MessageSquare },
+    { name: 'Newsletter', href: '/newsletter', icon: Mail },
+    { name: 'Wishlist Analytics', href: '/wishlist-analytics', icon: Heart },
+    { name: 'Settings', href: '/settings', icon: Settings },
   ]
 
   const isActive = (path: string) => {

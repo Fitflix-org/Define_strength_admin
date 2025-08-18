@@ -1,34 +1,57 @@
 {
-  "name": "fit-space-forge-admin",
+  "name": "definestrength-admin",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "build:prod": "NODE_ENV=production tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint . --ext ts,tsx --fix",
+    "type-check": "tsc --noEmit",
+    "serve": "vite preview --host 0.0.0.0 --port 3000"
   },
   "dependencies": {
-    "@tanstack/react-query": "^4.40.1",
+    "@tanstack/react-query": "^5.51.23",
+    "@tanstack/react-query-devtools": "^5.85.3",
     "@types/node": "^24.2.0",
     "axios": "^1.11.0",
-    "clsx": "^1.2.1",
+    "chart.js": "^4.4.0",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^3.6.0",
+    "framer-motion": "^11.18.2",
     "js-cookie": "^3.0.5",
-    "lucide-react": "^0.263.1",
+    "lucide-react": "^0.427.0",
     "react": "^18.3.1",
+    "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.3.1",
+    "react-hook-form": "^7.62.0",
     "react-router-dom": "^6.30.1",
-    "tailwind-merge": "^1.13.2"
+    "recharts": "^2.15.4",
+    "sonner": "^1.7.4",
+    "tailwind-merge": "^2.5.2",
+    "zod": "^3.25.76",
+    "zustand": "^4.5.7"
   },
   "devDependencies": {
+    "@hookform/resolvers": "^3.10.0",
     "@types/js-cookie": "^3.0.3",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
+    "@typescript-eslint/eslint-plugin": "^8.0.1",
+    "@typescript-eslint/parser": "^8.0.1",
     "@vitejs/plugin-react": "^4.0.3",
     "autoprefixer": "^10.4.14",
+    "eslint": "^9.8.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-refresh": "^0.4.9",
     "postcss": "^8.4.27",
-    "tailwindcss": "^3.3.3",
+    "tailwindcss": "^3.4.9",
+    "terser": "^5.43.1",
     "typescript": "^5.0.2",
-    "vite": "^4.4.5"
+    "vite": "^5.4.1"
   }
 }

@@ -1,411 +1,705 @@
 import React, { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import axios from 'axios'
-import { Search, CreditCard, Download, Filter } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { motion } from 'framer-motion'
+import {
+  CreditCard,
+  RefreshCw,
+  Download,
+  Eye,
+  RotateCcw,
+  DollarSign,
+  TrendingUp,
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  PieChart,
+  BarChart3,
+  Smartphone,
+  Wallet,
+  Building,
+  Banknote,
+  Filter,
+  Calendar,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { DataTable, Column, Action } from '../components/data/DataTable'
+import { MetricCard } from '../components/charts/MetricCard'
+import { LineChart } from '../components/charts/LineChart'
+import { paymentsAPI, dashboardAPI } from '../services/api'
+import { formatCurrency, formatDate, getStatusColor, cn, downloadBlob, calculatePercentageChange } from '../lib/utils'
+import type { Payment, PaymentFilters } from '../types'
 
-interface Payment {
-  id: string
-  amount: string | number  // API returns string, but we handle conversion
-  status: string
-  paymentMethod: string
-  gatewayTransactionId: string | null
-  gatewayProvider: string
-  gatewayPaymentId: string | null
-  transactionId: string | null
-  gatewayFee: string | number
-  netAmount: string | number
-  currency: string
-  createdAt: string
-  paidAt: string | null
-  failedAt: string | null
-  failureReason: string | null
-  order: {
-    id: string
-    total: string | number  // API returns string, but we handle conversion
-    user: {
-      firstName: string
-      lastName: string
-      email: string
-    }
-  }
-}
+export function PaymentsPage() {
+  const [filters, setFilters] = useState<PaymentFilters>({
+    page: 1,
+    limit: 25,
+    search: '',
+    status: '',
+    method: '',
+  })
+  const [selectedPayments, setSelectedPayments] = useState<Payment[]>([])
+  const [sortBy, setSortBy] = useState<string>('createdAt')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [showRefundModal, setShowRefundModal] = useState<{ payment: Payment; show: boolean }>({
+    payment: {} as Payment,
+    show: false,
+  })
 
-export const PaymentsPage: React.FC = () => {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const queryClient = useQueryClient()
 
-  const { data: paymentResponse, isLoading, error } = useQuery({
-    queryKey: ['payments'],
+  // Fetch payments
+  const {
+    data: paymentsResponse,
+    isLoading,
+    refetch,
+  } = useQuery({
+    queryKey: ['payments', filters, sortBy, sortOrder],
     queryFn: async () => {
-      const response = await axios.get('http://localhost:3001/api/admin/payments')
-      return response.data as { payments: Payment[], pagination: any }
-    }
+      const response = await paymentsAPI.getAll({
+        ...filters,
+        sortBy,
+        sortOrder,
+      })
+      return response.data
+    },
+    keepPreviousData: true,
   })
 
-  const payments = paymentResponse?.payments || []
-
-  const filteredPayments = payments?.filter(payment => {
-    const matchesSearch = 
-      `${payment.order.user.firstName} ${payment.order.user.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.order.user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.gatewayPaymentId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.transactionId?.toLowerCase().includes(searchTerm.toLowerCase())
-
-    const matchesStatus = statusFilter === 'all' || payment.status === statusFilter
-
-    return matchesSearch && matchesStatus
+  // Fetch payment analytics
+  const {
+    data: analyticsData,
+    isLoading: analyticsLoading,
+  } = useQuery({
+    queryKey: ['payment-analytics'],
+    queryFn: async () => {
+      const response = await dashboardAPI.getPaymentAnalytics()
+      return response.data.data
+    },
+    refetchInterval: 60000, // Refresh every minute
   })
 
-  const totalRevenue = payments?.reduce((sum, payment) => 
-    payment.status === 'COMPLETED' ? sum + Number(payment.amount) : sum, 0) || 0
+  // Quick refund mutation
+  const quickRefundMutation = useMutation({
+    mutationFn: ({ paymentId, percentage }: { paymentId: string; percentage: number }) =>
+      paymentsAPI.quickRefund(paymentId, percentage),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments'] })
+      toast.success('Refund processed successfully')
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.message || 'Failed to process refund')
+    },
+  })
 
-  const statusOptions = [
-    { value: 'all', label: 'All Status' },
-    { value: 'COMPLETED', label: 'Completed' },
-    { value: 'PENDING', label: 'Pending' },
-    { value: 'FAILED', label: 'Failed' },
-    { value: 'REFUNDED', label: 'Refunded' }
+  // Export CSV mutation
+  const exportCSVMutation = useMutation({
+    mutationFn: () => paymentsAPI.exportCSV(filters),
+    onSuccess: (response) => {
+      downloadBlob(response.data, `payments-${new Date().toISOString().split('T')[0]}.csv`)
+      toast.success('Payments exported successfully')
+    },
+    onError: () => {
+      toast.error('Failed to export payments')
+    },
+  })
+
+  const payments = paymentsResponse?.data || []
+  const pagination = paymentsResponse?.pagination
+
+  // Calculate metrics
+  const totalRevenue = payments.reduce((sum, payment) => 
+    payment.status === 'COMPLETED' ? sum + payment.amount : sum, 0
+  )
+  const completedPayments = payments.filter(payment => payment.status === 'COMPLETED').length
+  const failedPayments = payments.filter(payment => payment.status === 'FAILED').length
+  const pendingPayments = payments.filter(payment => payment.status === 'PENDING').length
+
+  const columns: Column<Payment>[] = [
+    {
+      key: 'id',
+      header: 'Payment ID',
+      sortable: true,
+      render: (payment) => (
+        <div className="font-mono text-xs text-blue-600 dark:text-blue-400">
+          #{payment.id.slice(-8)}
+        </div>
+      ),
+      width: '120px',
+    },
+    {
+      key: 'order',
+      header: 'Order',
+      render: (payment) => (
+        <div>
+          {payment.order ? (
+            <div>
+              <div className="font-medium text-gray-900 dark:text-white">
+                Order #{payment.order.id.slice(-8)}
+              </div>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                {payment.order.user?.firstName && payment.order.user?.lastName
+                  ? `${payment.order.user.firstName} ${payment.order.user.lastName}`
+                  : payment.order.user?.email}
+              </div>
+            </div>
+          ) : (
+            <span className="text-gray-400">No order</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'amount',
+      header: 'Amount',
+      sortable: true,
+      align: 'right',
+      render: (payment) => (
+        <div className="text-right">
+          <div className="font-semibold text-gray-900 dark:text-white">
+            {formatCurrency(payment.amount)}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            Net: {formatCurrency(payment.netAmount)}
+          </div>
+        </div>
+      ),
+      width: '120px',
+    },
+    {
+      key: 'paymentMethod',
+      header: 'Method',
+      sortable: true,
+      render: (payment) => (
+        <div className="flex items-center">
+          <CreditCard className="w-4 h-4 mr-2 text-gray-400" />
+          <span className="text-sm font-medium text-gray-900 dark:text-white">
+            {payment.paymentMethod}
+          </span>
+        </div>
+      ),
+      width: '120px',
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      render: (payment) => (
+        <span className={cn(
+          'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
+          getStatusColor(payment.status)
+        )}>
+          {payment.status}
+        </span>
+      ),
+      width: '120px',
+    },
+    {
+      key: 'gatewayFee',
+      header: 'Gateway Fee',
+      align: 'right',
+      render: (payment) => (
+        <div className="text-right text-sm text-gray-600 dark:text-gray-400">
+          {formatCurrency(payment.gatewayFee)}
+        </div>
+      ),
+      width: '100px',
+    },
+    {
+      key: 'createdAt',
+      header: 'Date',
+      sortable: true,
+      render: (payment) => (
+        <div className="text-sm">
+          <div className="text-gray-900 dark:text-white">
+            {formatDate(payment.createdAt, 'short')}
+          </div>
+          <div className="text-gray-500 dark:text-gray-400">
+            {formatDate(payment.createdAt, 'relative')}
+          </div>
+        </div>
+      ),
+      width: '120px',
+    },
   ]
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="text-center text-red-600 p-8">
-        Failed to load payments. Please try again.
-      </div>
-    )
-  }
+  const actions: Action<Payment>[] = [
+    {
+      label: 'View Details',
+      icon: Eye,
+      onClick: (payment) => {
+        console.log('View payment:', payment.id)
+      },
+    },
+    {
+      label: 'Quick Refund (100%)',
+      icon: RotateCcw,
+      onClick: (payment) => {
+        if (confirm('Are you sure you want to process a full refund?')) {
+          quickRefundMutation.mutate({ paymentId: payment.id, percentage: 100 })
+        }
+      },
+      disabled: (payment) => payment.status !== 'COMPLETED',
+      color: 'danger',
+    },
+    {
+      label: 'Partial Refund',
+      icon: DollarSign,
+      onClick: (payment) => {
+        setShowRefundModal({ payment, show: true })
+      },
+      disabled: (payment) => payment.status !== 'COMPLETED',
+      color: 'primary',
+    },
+  ]
 
   return (
-    <div className="space-y-4 lg:space-y-6">
-      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center space-y-2 lg:space-y-0">
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl lg:text-2xl font-bold text-gray-900">Payments Management</h1>
-          <p className="text-sm lg:text-base text-gray-600">Track all payment transactions and revenue</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Payments
+          </h1>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            Manage payment transactions and process refunds
+          </p>
         </div>
-        <div className="text-left lg:text-right">
-          <div className="text-xs lg:text-sm text-gray-500">Total Revenue</div>
-          <div className="text-xl lg:text-2xl font-bold text-green-600">
-            ${totalRevenue.toFixed(2)}
-          </div>
+
+        <div className="mt-4 sm:mt-0 flex items-center space-x-3">
+          <button
+            onClick={() => exportCSVMutation.mutate()}
+            disabled={exportCSVMutation.isLoading}
+            className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+          >
+            {exportCSVMutation.isLoading ? (
+              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4 mr-2" />
+            )}
+            Export CSV
+          </button>
+
+          <button
+            onClick={() => refetch()}
+            disabled={isLoading}
+            className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+          >
+            <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
+          </button>
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col lg:flex-row gap-3 lg:gap-4">
-        <div className="relative flex-1">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-4 w-4 lg:h-5 lg:w-5 text-gray-400" />
-          </div>
-          <input
-            type="text"
-            placeholder="Search by customer, email, or transaction ID..."
-            className="block w-full pl-9 lg:pl-10 pr-3 py-2 text-sm lg:text-base border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+      {/* Key Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <MetricCard
+          title="Total Revenue"
+          value={totalRevenue}
+          format="currency"
+          icon={TrendingUp}
+          color="green"
+          loading={isLoading}
+        />
+        
+        <MetricCard
+          title="Completed Payments"
+          value={completedPayments}
+          format="number"
+          icon={CheckCircle}
+          color="green"
+          loading={isLoading}
+        />
+        
+        <MetricCard
+          title="Failed Payments"
+          value={failedPayments}
+          format="number"
+          icon={AlertTriangle}
+          color="red"
+          loading={isLoading}
+        />
+        
+        <MetricCard
+          title="Pending Payments"
+          value={pendingPayments}
+          format="number"
+          icon={Clock}
+          color="yellow"
+          loading={isLoading}
           />
         </div>
         
-        <div className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Filter className="h-4 w-4 lg:h-5 lg:w-5 text-gray-400" />
+      {/* Filters */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Status
+            </label>
+            <select
+              value={filters.status || ''}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value, page: 1 })}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">All Statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="PROCESSING">Processing</option>
+              <option value="COMPLETED">Completed</option>
+              <option value="FAILED">Failed</option>
+              <option value="CANCELLED">Cancelled</option>
+              <option value="REFUNDED">Refunded</option>
+            </select>
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Payment Method
+            </label>
           <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="pl-9 lg:pl-10 pr-8 py-2 text-sm lg:text-base border border-gray-300 rounded-md leading-5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-          >
-            {statusOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
+              value={filters.method || ''}
+              onChange={(e) => setFilters({ ...filters, method: e.target.value, page: 1 })}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">All Methods</option>
+              <option value="CARD">Card</option>
+              <option value="UPI">UPI</option>
+              <option value="WALLET">Wallet</option>
+              <option value="BANK_TRANSFER">Bank Transfer</option>
+              <option value="COD">Cash on Delivery</option>
           </select>
         </div>
         
-        <button className="flex items-center justify-center px-3 lg:px-4 py-2 border border-gray-300 rounded-md text-xs lg:text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
-          <Download className="h-3 w-3 lg:h-4 lg:w-4 mr-1 lg:mr-2" />
-          Export
-        </button>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Date From
+            </label>
+            <input
+              type="date"
+              value={filters.dateFrom || ''}
+              onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value, page: 1 })}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
       </div>
 
-      {/* Payments List */}
-      <div className="bg-white shadow overflow-hidden rounded-lg">
-        {filteredPayments && filteredPayments.length > 0 ? (
-          <>
-            {/* Desktop Table View */}
-            <div className="hidden lg:block overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Transaction
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Customer
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Amount
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Method
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Date
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredPayments.map((payment) => (
-                    <tr key={payment.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
                         <div>
-                          <div className="text-sm font-medium text-gray-900">
-                            {payment.id.slice(-8)}
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Date To
+            </label>
+            <input
+              type="date"
+              value={filters.dateTo || ''}
+              onChange={(e) => setFilters({ ...filters, dateTo: e.target.value, page: 1 })}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
                           </div>
-                          {payment.transactionId && (
-                            <div className="text-sm text-gray-500">
-                              TXN: {payment.transactionId.slice(-8)}
                             </div>
-                          )}
-                          {payment.gatewayPaymentId && (
-                            <div className="text-sm text-gray-500">
-                              Gateway: {payment.gatewayPaymentId.slice(-8)}
+
+      {/* Payment Analytics Charts */}
+      {analyticsData && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Payment Methods Breakdown */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Payment Methods
+              </h2>
+              <PieChart className="w-5 h-5 text-gray-400" />
                             </div>
-                          )}
+            
+            <div className="space-y-4">
+              {analyticsData.paymentMethods?.map((method: any, index: number) => {
+                const total = analyticsData.paymentMethods.reduce((sum: number, m: any) => sum + m.amount, 0)
+                const percentage = (method.amount / total) * 100
+                const icon = getPaymentMethodIcon(method.method)
+                
+                return (
+                  <div key={method.method} className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      {icon}
+                      <div className="ml-3">
+                        <div className="text-sm font-medium text-gray-900 dark:text-white">
+                          {method.method}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">
-                            {payment.order.user.firstName} {payment.order.user.lastName}
+                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                          {method.count} transactions
                           </div>
-                          <div className="text-sm text-gray-500">
-                            {payment.order.user.email}
                           </div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">
-                          ${Number(payment.amount).toFixed(2)}
+                    <div className="text-right">
+                      <div className="text-sm font-semibold text-gray-900 dark:text-white">
+                        {formatCurrency(method.amount)}
                         </div>
-                        <div className="text-sm text-gray-500">
-                          Net: ${Number(payment.netAmount).toFixed(2)}
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        {percentage.toFixed(1)}%
                         </div>
-                        {payment.gatewayFee && Number(payment.gatewayFee) > 0 && (
-                          <div className="text-sm text-red-500">
-                            Fee: ${Number(payment.gatewayFee).toFixed(2)}
                           </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <CreditCard className="h-4 w-4 text-gray-400 mr-2" />
-                          <span className="text-sm text-gray-900 capitalize">
-                            {payment.paymentMethod}
-                          </span>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          payment.status === 'COMPLETED' 
-                            ? 'bg-green-100 text-green-800'
-                            : payment.status === 'PENDING'
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : payment.status === 'FAILED'
-                            ? 'bg-red-100 text-red-800'
-                            : payment.status === 'REFUNDED'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {payment.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        <div>
-                          <div>{new Date(payment.createdAt).toLocaleDateString()}</div>
-                          <div>{new Date(payment.createdAt).toLocaleTimeString()}</div>
+                )
+              })}
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          </motion.div>
+
+          {/* Payment Success Rate */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Payment Success Rate
+              </h2>
+              <BarChart3 className="w-5 h-5 text-gray-400" />
             </div>
 
-            {/* Mobile Card View */}
-            <ul className="lg:hidden divide-y divide-gray-200">
-              {filteredPayments.map((payment) => (
-                <li key={payment.id} className="p-4">
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">
-                          {payment.order.user.firstName} {payment.order.user.lastName}
-                        </p>
-                        <p className="text-xs text-gray-500">{payment.order.user.email}</p>
-                      </div>
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                        payment.status === 'COMPLETED' 
-                          ? 'bg-green-100 text-green-800'
-                          : payment.status === 'PENDING'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : payment.status === 'FAILED'
-                          ? 'bg-red-100 text-red-800'
-                          : payment.status === 'REFUNDED'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {payment.status}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Success Rate</span>
+                <span className="text-2xl font-bold text-green-600 dark:text-green-400">
+                  {(completedPayments / (payments.length || 1) * 100).toFixed(1)}%
                       </span>
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <span className="text-gray-500">Amount:</span>
-                        <p className="font-medium text-gray-900">${Number(payment.amount).toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Net:</span>
-                        <p className="font-medium text-gray-900">${Number(payment.netAmount).toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Method:</span>
-                        <p className="font-medium text-gray-900 capitalize flex items-center">
-                          <CreditCard className="h-3 w-3 mr-1 text-gray-400" />
-                          {payment.paymentMethod}
-                        </p>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">Date:</span>
-                        <p className="font-medium text-gray-900">{new Date(payment.createdAt).toLocaleDateString()}</p>
-                      </div>
+              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${completedPayments / (payments.length || 1) * 100}%` }}
+                  transition={{ duration: 1, ease: "easeOut" }}
+                  className="bg-green-500 h-3 rounded-full"
+                />
                     </div>
                     
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-gray-500">Transaction ID:</span>
-                        <span className="text-gray-900">{payment.id.slice(-8)}</span>
-                      </div>
-                      {payment.transactionId && (
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">TXN:</span>
-                          <span className="text-gray-900">{payment.transactionId.slice(-8)}</span>
-                        </div>
-                      )}
-                      {payment.gatewayPaymentId && (
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">Gateway:</span>
-                          <span className="text-gray-900">{payment.gatewayPaymentId.slice(-8)}</span>
-                        </div>
-                      )}
-                      {payment.gatewayFee && Number(payment.gatewayFee) > 0 && (
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">Fee:</span>
-                          <span className="text-red-600">${Number(payment.gatewayFee).toFixed(2)}</span>
-                        </div>
-                      )}
+              <div className="grid grid-cols-3 gap-4 mt-4">
+                <div className="text-center">
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Completed</div>
+                  <div className="text-sm font-semibold text-green-600 dark:text-green-400">
+                    {completedPayments}
                     </div>
                   </div>
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <div className="text-center py-8 lg:py-12">
-            <CreditCard className="mx-auto h-8 w-8 lg:h-12 lg:w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900">No payments found</h3>
-            <p className="mt-1 text-sm text-gray-500">
-              {searchTerm || statusFilter !== 'all' 
-                ? 'Try adjusting your search criteria or filters' 
-                : 'No payments have been processed yet'
-              }
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Summary Stats */}
-      {payments && payments.length > 0 && (
-        <div className="grid grid-cols-1 gap-3 lg:gap-5 lg:grid-cols-3">
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-4 lg:p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="bg-green-100 p-2 lg:p-3 rounded-md">
-                    <CreditCard className="h-5 w-5 lg:h-6 lg:w-6 text-green-600" />
+                <div className="text-center">
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Failed</div>
+                  <div className="text-sm font-semibold text-red-600 dark:text-red-400">
+                    {failedPayments}
                   </div>
                 </div>
-                <div className="ml-4 lg:ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-xs lg:text-sm font-medium text-gray-500 truncate">
-                      Completed Payments
-                    </dt>
-                    <dd className="text-base lg:text-lg font-medium text-gray-900">
-                      {payments.filter(p => p.status === 'COMPLETED').length}
-                    </dd>
-                  </dl>
+                <div className="text-center">
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Pending</div>
+                  <div className="text-sm font-semibold text-yellow-600 dark:text-yellow-400">
+                    {pendingPayments}
                 </div>
               </div>
             </div>
           </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-4 lg:p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="bg-yellow-100 p-2 lg:p-3 rounded-md">
-                    <CreditCard className="h-5 w-5 lg:h-6 lg:w-6 text-yellow-600" />
-                  </div>
-                </div>
-                <div className="ml-4 lg:ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-xs lg:text-sm font-medium text-gray-500 truncate">
-                      Pending Payments
-                    </dt>
-                    <dd className="text-base lg:text-lg font-medium text-gray-900">
-                      {payments.filter(p => p.status === 'PENDING').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-4 lg:p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="bg-red-100 p-2 lg:p-3 rounded-md">
-                    <CreditCard className="h-5 w-5 lg:h-6 lg:w-6 text-red-600" />
-                  </div>
-                </div>
-                <div className="ml-4 lg:ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-xs lg:text-sm font-medium text-gray-500 truncate">
-                      Failed Payments
-                    </dt>
-                    <dd className="text-base lg:text-lg font-medium text-gray-900">
-                      {payments.filter(p => p.status === 'FAILED').length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
+          </motion.div>
         </div>
       )}
+
+      {/* Recent Transactions Trend */}
+      {analyticsData?.transactionTrend && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Transaction Trend (Last 30 Days)
+            </h2>
+            <TrendingUp className="w-5 h-5 text-gray-400" />
+                  </div>
+          
+          <LineChart
+            data={analyticsData.transactionTrend}
+            xKey="date"
+            yKeys={[
+              {
+                key: 'amount',
+                name: 'Amount',
+                color: '#3b82f6',
+                format: 'currency',
+              },
+              {
+                key: 'count',
+                name: 'Count',
+                color: '#10b981',
+                format: 'number',
+              },
+            ]}
+            height={300}
+            loading={analyticsLoading}
+          />
+        </motion.div>
+      )}
+
+      {/* Payments Table */}
+      <DataTable
+        data={payments}
+        columns={columns}
+        actions={actions}
+        loading={isLoading}
+        pagination={pagination ? {
+          page: pagination.page,
+          limit: pagination.limit,
+          total: pagination.total,
+          onPageChange: (page) => setFilters({ ...filters, page }),
+          onLimitChange: (limit) => setFilters({ ...filters, limit, page: 1 }),
+        } : undefined}
+        selection={{
+          selectedItems: selectedPayments,
+          onSelectionChange: setSelectedPayments,
+          keyExtractor: (payment) => payment.id,
+        }}
+        sorting={{
+          sortBy,
+          sortOrder,
+          onSortChange: (key, order) => {
+            setSortBy(key)
+            setSortOrder(order)
+          },
+        }}
+        filtering={{
+          searchTerm: filters.search,
+          onSearchChange: (search) => setFilters({ ...filters, search, page: 1 }),
+        }}
+        emptyState={{
+          title: 'No payments found',
+          description: 'There are no payments matching your current filters.',
+        }}
+      />
+
+      {/* Refund Modal */}
+      {showRefundModal.show && (
+        <RefundModal
+          payment={showRefundModal.payment}
+          onClose={() => setShowRefundModal({ payment: {} as Payment, show: false })}
+          onSubmit={(percentage) => {
+            quickRefundMutation.mutate({ 
+              paymentId: showRefundModal.payment.id, 
+              percentage 
+            })
+            setShowRefundModal({ payment: {} as Payment, show: false })
+          }}
+          isLoading={quickRefundMutation.isLoading}
+        />
+      )}
+                </div>
+  )
+}
+
+// Helper function to get payment method icons
+function getPaymentMethodIcon(method: string) {
+  switch (method) {
+    case 'CARD':
+      return <CreditCard className="w-4 h-4 text-blue-500" />
+    case 'UPI':
+      return <Smartphone className="w-4 h-4 text-green-500" />
+    case 'WALLET':
+      return <Wallet className="w-4 h-4 text-purple-500" />
+    case 'BANK_TRANSFER':
+      return <Building className="w-4 h-4 text-indigo-500" />
+    case 'COD':
+      return <Banknote className="w-4 h-4 text-orange-500" />
+    default:
+      return <CreditCard className="w-4 h-4 text-gray-500" />
+  }
+}
+
+// Refund Modal Component
+interface RefundModalProps {
+  payment: Payment
+  onClose: () => void
+  onSubmit: (percentage: number) => void
+  isLoading: boolean
+}
+
+function RefundModal({ payment, onClose, onSubmit, isLoading }: RefundModalProps) {
+  const [percentage, setPercentage] = useState(100)
+  const refundAmount = (payment.amount * percentage) / 100
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (percentage > 0 && percentage <= 100) {
+      onSubmit(percentage)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6"
+      >
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          Process Refund
+        </h3>
+
+        <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+          <div className="text-sm text-gray-600 dark:text-gray-400">Payment Details</div>
+          <div className="font-semibold text-gray-900 dark:text-white">
+            {formatCurrency(payment.amount)}
+                </div>
+          <div className="text-xs text-gray-500">
+            Payment ID: #{payment.id.slice(-8)}
+            </div>
+          </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Refund Percentage
+            </label>
+            <div className="flex items-center space-x-2">
+              <input
+                type="range"
+                min="1"
+                max="100"
+                value={percentage}
+                onChange={(e) => setPercentage(Number(e.target.value))}
+                className="flex-1"
+              />
+              <span className="text-sm font-medium text-gray-900 dark:text-white w-12">
+                {percentage}%
+              </span>
+                  </div>
+                </div>
+
+          <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+            <div className="text-sm text-gray-600 dark:text-gray-400">Refund Amount</div>
+            <div className="text-lg font-bold text-blue-600 dark:text-blue-400">
+              {formatCurrency(refundAmount)}
+                </div>
+              </div>
+
+          <div className="flex justify-end space-x-3 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin inline" />
+                  Processing...
+                </>
+              ) : (
+                'Process Refund'
+              )}
+            </button>
+            </div>
+        </form>
+      </motion.div>
     </div>
   )
 }

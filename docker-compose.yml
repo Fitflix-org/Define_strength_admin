@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  admin-panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - fitspace-network
+
+  api:
+    # Your backend API container configuration
+    # This should match your backend API service
+    image: your-api-image:latest
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+    restart: unless-stopped
+    networks:
+      - fitspace-network
+
+networks:
+  fitspace-network:
+    driver: bridge
